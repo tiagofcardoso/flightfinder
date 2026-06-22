@@ -34,6 +34,27 @@ class AlertRequest(BaseModel):
     target_price: float
     chat_id: Optional[str] = None
 
+async def start_keep_alive_loop():
+    url = os.environ.get("RENDER_EXTERNAL_URL")
+    if not url:
+        logger.info("Keep-alive loop disabled: RENDER_EXTERNAL_URL not found.")
+        return
+    
+    if not url.endswith("/"):
+        url += "/"
+    url += "api/health"
+    
+    logger.info(f"Keep-alive loop started. Pinging {url} every 14 minutes.")
+    import httpx
+    while True:
+        await asyncio.sleep(14 * 60) # 14 minutes
+        try:
+            async with httpx.AsyncClient() as client:
+                res = await client.get(url, timeout=10.0)
+                logger.info(f"Keep-alive ping successful: {res.status_code}")
+        except Exception as e:
+            logger.error(f"Keep-alive ping failed: {e}")
+
 # Life cycle event manager for FastAPI
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -45,15 +66,19 @@ async def lifespan(app: FastAPI):
     listener_task = asyncio.create_task(start_telegram_listener())
     logger.info("FastAPI Lifespan: Telegram updates listener task launched successfully.")
     
+    keep_alive_task = asyncio.create_task(start_keep_alive_loop())
+    logger.info("FastAPI Lifespan: Keep-alive task launched successfully.")
+    
     yield
     
     # Shutdown: Cancel tasks gracefully
     logger.info("FastAPI Lifespan: Cancelling background tasks...")
     scheduler_task.cancel()
     listener_task.cancel()
+    keep_alive_task.cancel()
     
     try:
-        await asyncio.gather(scheduler_task, listener_task, return_exceptions=True)
+        await asyncio.gather(scheduler_task, listener_task, keep_alive_task, return_exceptions=True)
     except Exception as e:
         logger.error(f"FastAPI Lifespan: Task cancellation exception: {e}")
     logger.info("FastAPI Lifespan: Tasks cancelled cleanly.")
