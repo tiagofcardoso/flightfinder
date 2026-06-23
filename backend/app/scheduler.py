@@ -56,6 +56,7 @@ async def check_alerts():
                 
             cheapest_offer = flights[0]
             current_price = float(cheapest_offer["price"])
+            booking_url = cheapest_offer.get("booking_url")
             logger.info(f"Scheduler: Alert #{alert_id} current cheapest price: ${current_price}")
             
             # Check conditions to send alert:
@@ -86,7 +87,8 @@ async def check_alerts():
                     old_price=last_price,
                     new_price=current_price,
                     target_price=target_price,
-                    chat_id=chat_id
+                    chat_id=chat_id,
+                    booking_url=booking_url
                 )
                 
             # Always update DB state with latest price

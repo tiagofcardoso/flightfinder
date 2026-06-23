@@ -58,10 +58,13 @@ class SerpApiFlightProvider(FlightProvider):
                     
                 data = response.json()
                 
+                # Capture the direct Google Flights URL from SerpAPI metadata
+                search_url = data.get("search_metadata", {}).get("google_flights_url", None)
+                
                 # SerpAPI returns flights under 'best_flights' and 'other_flights'
                 flights_list = data.get("best_flights", []) + data.get("other_flights", [])
                 
-                return self._parse_serpapi_flights(flights_list, origin, destination, passengers, max_price)
+                return self._parse_serpapi_flights(flights_list, origin, destination, passengers, max_price, search_url)
                 
         except Exception as e:
             logger.error(f"Error searching flights on SerpAPI: {e}", exc_info=True)
@@ -73,7 +76,8 @@ class SerpApiFlightProvider(FlightProvider):
         origin: str,
         destination: str,
         passengers: int,
-        max_price: Optional[float]
+        max_price: Optional[float],
+        search_url: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         parsed_offers = []
         
@@ -108,6 +112,14 @@ class SerpApiFlightProvider(FlightProvider):
                 
                 total_duration = flight.get("total_duration", 0)
                 
+                # Build a fallback Google Flights URL if SerpAPI didn't return one
+                booking_url = search_url
+                if not booking_url:
+                    gf_base = "https://www.google.com/travel/flights/search"
+                    booking_url = (
+                        f"{gf_base}?q=flights+from+{origin.upper()}+to+{destination.upper()}"
+                    )
+
                 parsed_offers.append({
                     "id": f"SA-{origin}-{destination}-{idx}",
                     "price": price * passengers,
@@ -116,7 +128,8 @@ class SerpApiFlightProvider(FlightProvider):
                     "outbound": outbound,
                     "inbound": inbound,
                     "total_duration_minutes": total_duration,
-                    "stops": outbound["stops"] + (inbound["stops"] if inbound else 0)
+                    "stops": outbound["stops"] + (inbound["stops"] if inbound else 0),
+                    "booking_url": booking_url
                 })
             except Exception as e:
                 logger.error(f"Error parsing SerpAPI flight offer: {e}")

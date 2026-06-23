@@ -48,7 +48,8 @@ async def notify_price_drop(
     old_price: Optional[float],
     new_price: float,
     target_price: float,
-    chat_id: Optional[str] = None
+    chat_id: Optional[str] = None,
+    booking_url: Optional[str] = None
 ) -> bool:
     """
     Sends a structured price drop notification over Telegram.
@@ -79,8 +80,11 @@ async def notify_price_drop(
     
     if new_price <= target_price:
         lines.append("\n🔥 *O preço está ABAIXO do seu orçamento alvo! Garanta já!* 🔥")
-        
-    lines.append("\n🔗 Abra o dashboard local para reservar.")
+
+    if booking_url:
+        lines.append(f"\n🔗 [👆 Abrir no Google Flights]({booking_url})")
+    else:
+        lines.append("\n🔗 Abra o dashboard para ver os voos disponíveis.")
     
     msg_text = "\n".join(lines)
     return await send_telegram_message(msg_text, chat_id)
