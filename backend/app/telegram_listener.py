@@ -58,7 +58,9 @@ async def parse_flight_query_with_gemini(text: str) -> Optional[Dict[str, Any]]:
 
 async def handle_telegram_message(chat_id: int, text: str):
     """Processes text message from Telegram client."""
-    if text.startswith("/start"):
+    text_clean = text.strip().lower()
+
+    if text_clean.startswith("/start"):
         welcome = (
             "👋 *Bem-vindo ao AeroMilhas AI Bot!* ✈️\n\n"
             "Eu sou o seu assistente de voos e preços 24h. "
@@ -70,14 +72,27 @@ async def handle_telegram_message(chat_id: int, text: str):
         )
         await send_telegram_message(welcome, str(chat_id))
         return
+
+    # Detect simple greetings and respond helpfully
+    greetings = {"oi", "olá", "ola", "hello", "hi", "hey", "bom dia", "boa tarde", "boa noite", "tudo bem", "bom dia!", "boa tarde!", "boa noite!"}
+    if text_clean in greetings or any(text_clean.startswith(g) for g in greetings):
+        await send_telegram_message(
+            "👋 *Olá!* Sou o *AeroMilhas Bot* ✈️\n\n"
+            "Diga-me para onde quer voar! Por exemplo:\n"
+            "`Lisboa para Paris a 10 de Setembro`\n"
+            "`GRU para JFK dia 15/10 volta 22/10 orçamento $800`\n\n"
+            "Também pode enviar /start para ver as instruções completas.",
+            str(chat_id)
+        )
+        return
         
     await send_telegram_message("🤖 *Analisando a sua solicitação com IA...*", str(chat_id))
     
     extracted = await parse_flight_query_with_gemini(text)
     if not extracted or not extracted.get("origin") or not extracted.get("destination") or not extracted.get("departure_date"):
         err_msg = (
-            "❌ *Não consegui compreender a sua pesquisa de voo.*\n\n"
-            "Por favor, certifique-se de indicar a **origem**, o **destino** e a **data** do voo.\n"
+            "❌ *Não consegui identificar um voo na sua mensagem.*\n\n"
+            "Por favor, indique a **origem**, o **destino** e a **data**.\n"
             "Exemplo: `Lisboa para Paris a 10 de Setembro`"
         )
         await send_telegram_message(err_msg, str(chat_id))
