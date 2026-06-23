@@ -290,9 +290,15 @@ async def start_telegram_listener():
                             
                             asyncio.create_task(handle_callback_query(chat_id, message_id, data_val, cq_id))
                 elif response.status_code == 409:
-                    logger.error("Telegram Listener: Webhook is active. Disabling listener.")
-                    # A web hook is active on the bot. Stop listener to prevent CPU loop.
-                    break
+                    logger.warning("Telegram Listener: 409 Conflict - attempting to delete active webhook and retry...")
+                    try:
+                        del_url = f"https://api.telegram.org/bot{bot_token}/deleteWebhook?drop_pending_updates=true"
+                        async with httpx.AsyncClient() as del_client:
+                            del_resp = await del_client.get(del_url, timeout=10.0)
+                            logger.info(f"Telegram Listener: deleteWebhook result: {del_resp.text}")
+                    except Exception as del_err:
+                        logger.error(f"Telegram Listener: Failed to delete webhook: {del_err}")
+                    await asyncio.sleep(5)
                 else:
                     logger.error(f"Telegram Listener: Failed to fetch updates. Status {response.status_code}: {response.text}")
                     
