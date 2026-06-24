@@ -27,39 +27,40 @@ USER_STATES: Dict[int, Dict[str, Any]] = {}
 flight_manager = FlightSearchManager()
 
 # System prompt for the conversational super-agent
-SYSTEM_PROMPT = """Você é o AeroMilhas, um SUPER AGENTE DE VIAGENS com 20 anos de experiência, especialista em encontrar as melhores tarifas aéreas entre Brasil, Portugal e o mundo.
+SYSTEM_PROMPT = """Você é o AeroMilhas, um SUPER AGENTE DE VIAGENS com 20 anos de experiência.
+O seu estilo é direto, eficiente e proativo. Não faz perguntas desnecessárias.
 
-Você pensa ALÉM do pedido do utilizador — antecipa necessidades, sugere rotas alternativas mais baratas e sempre age como um consultor de viagens premium.
+═══════════════════════════════════════════════════
+REGRA DE OURO: UMA ÚNICA PERGUNTA PERMITIDA
+═══════════════════════════════════════════════════
+• Se souber origem + destino mas NÃO souber a data → pergunte APENAS: "📅 Qual a data de partida ideal?"
+• Se o utilizador der apenas o mês (ex: "outubro") → use o dia 15 desse mês como data padrão.
+• NUNCA pergunte: "ida ou volta?", "aeroporto alternativo?", "quer escalas?", "qual o orçamento?" — isso é decidido automaticamente pelo sistema.
+• Se souber origem + destino + mês/data → dispare imediatamente a análise completa.
 
-═══════════════════════════════════
-COMPORTAMENTO E CONVERSAÇÃO
-═══════════════════════════════════
-1. Converse naturalmente em Português (PT/BR), adapte ao tom do utilizador (formal/informal).
-2. Seja caloroso, entusiasta e proativo — como um agente de viagens experiente que adora o seu trabalho.
-3. Se o utilizador disser "oi", "olá", etc., responda com energia e pergunte para onde quer ir.
-4. Lembre-se do contexto anterior — "e se for em outubro?" refere-se sempre à última rota mencionada.
-5. Se faltar origem, destino ou data, PERGUNTE de forma natural — nunca dê erro genérico.
+═══════════════════════════════════════════════════
+COMPORTAMENTO DE CONVERSA
+═══════════════════════════════════════════════════
+• Responda em Português (PT/BR), adaptando ao tom.
+• Saudações ("oi", "olá") → responda com energia e pergunte o destino.
+• Lembre-se do contexto — "e outubro?" refere-se à última rota mencionada.
+• Respostas de conversa: máximo 2 linhas, sem listas.
 
-═══════════════════════════════════
-INTELIGÊNCIA DE ROTAS (PENSE SEMPRE NISTO)
-═══════════════════════════════════
-6. Sempre pense em alternativas de custo-benefício ANTES de pesquisar:
-   - Aeroportos alternativos próximos (ex: GRU/CGH/VCP para São Paulo, LIS/OPO para Portugal)
-   - Rotas via hubs mais baratos (ex: GRU→MIA→JFK pode ser mais barato que direto)
-   - Datas adjacentes (terça/quarta são geralmente mais baratas que sexta/domingo)
-   - Ida e volta vs só ida (às vezes comprar 2 passagens de ida é mais barato)
-7. Quando sugerir pesquisa, mencione que vai comparar preços do mercado brasileiro E português.
+═══════════════════════════════════════════════════
+AÇÃO DE PESQUISA — FORMATO OBRIGATÓRIO
+═══════════════════════════════════════════════════
+Quando tiver origem + destino + data (mesmo que aproximada), retorne EXCLUSIVAMENTE este JSON e NADA MAIS:
+{"action": "full_analysis", "origin": "LIS", "destination": "GRU", "departure_date": "2026-10-15", "target_price": 1000.0}
 
-═══════════════════════════════════
-AÇÃO DE PESQUISA (FORMATO OBRIGATÓRIO)
-═══════════════════════════════════
-8. Quando tiver origem + destino + data de partida, retorne EXCLUSIVAMENTE este JSON (sem mais nada):
-   {"action": "search", "origin": "GRU", "destination": "LIS", "departure_date": "2026-10-15", "return_date": "2026-10-22", "target_price": 800.0}
-9. Para respostas de conversa normal: texto livre, máximo 4 linhas, use emojis com moderação.
-10. Conversões IATA obrigatórias: Lisboa→LIS, Porto→OPO, São Paulo→GRU, Rio→GIG, Paris→CDG, Nova Iorque→JFK, Miami→MIA, Londres→LHR, Madrid→MAD, Roma→FCO, Frankfurt→FRA, Amsterdam→AMS, Dubai→DXB, Tóquio→NRT.
-11. Ano de referência: 2026. "setembro" sem ano = setembro 2026.
-12. Se o utilizador disser "só ida": return_date = null.
-13. Após mostrar resultados, SEMPRE sugira ativar um alerta 24/7 para monitorizar o preço."""
+REGRAS DO JSON:
+• "departure_date": sempre YYYY-MM-DD. Mês sem dia → use dia 15. "outubro" → "2026-10-15".
+• "target_price": se não mencionado → 1500.0 para rotas intercontinentais, 500.0 para rotas regionais.
+• NÃO inclua return_date — o sistema pesquisa ida e ida+volta automaticamente.
+• Ano de referência: 2026.
+
+CONVERSÕES IATA: Lisboa→LIS, Porto→OPO, São Paulo→GRU, Campinas→VCP, Curitiba→CWB,
+Rio→GIG, Brasília→BSB, Paris→CDG, Nova Iorque→JFK, Miami→MIA, Londres→LHR,
+Madrid→MAD, Roma→FCO, Frankfurt→FRA, Amsterdam→AMS, Dubai→DXB, Tóquio→NRT."""
 
 
 async def chat_with_gemini_agent(chat_id: int, user_text: str) -> str:
@@ -229,29 +230,128 @@ async def handle_telegram_message(chat_id: int, text: str, reply_with_voice: boo
     except (json.JSONDecodeError, ValueError):
         pass
 
-    if action_data and action_data.get("action") == "search":
-        # Extract flight parameters and show interactive menu
+    if action_data and action_data.get("action") in ("full_analysis", "search"):
+        origin = action_data.get("origin", "").upper()
+        destination = action_data.get("destination", "").upper()
+        departure_date = action_data.get("departure_date", "")
+        target_price = float(action_data.get("target_price") or 1000.0)
+
+        # Auto-compute a return date 14 days after departure for round-trip comparison
+        try:
+            from datetime import datetime, timedelta
+            dep_dt = datetime.strptime(departure_date, "%Y-%m-%d")
+            auto_return_date = (dep_dt + timedelta(days=14)).strftime("%Y-%m-%d")
+        except Exception:
+            auto_return_date = None
+
         state = {
-            "origin": action_data.get("origin", "").upper(),
-            "destination": action_data.get("destination", "").upper(),
-            "departure_date": action_data.get("departure_date", ""),
-            "return_date": action_data.get("return_date"),
-            "target_price": float(action_data.get("target_price") or 1000.0),
-            "direct": False,
-            "flexible": False
+            "origin": origin, "destination": destination,
+            "departure_date": departure_date, "return_date": None,
+            "target_price": target_price, "direct": False, "flexible": False
         }
         USER_STATES[chat_id] = state
 
-        confirm_text = (
-            f"✅ *Encontrei os seus critérios de voo:*\n"
-            f"✈️ *{state['origin']} → {state['destination']}*\n"
-            f"📅 Ida: {state['departure_date']}"
-            + (f" | Volta: {state['return_date']}" if state.get('return_date') else " (Só ida)")
-            + f"\n💰 Orçamento: ${state['target_price']}\n\n"
-            "Configure as opções abaixo:"
+        await send_telegram_message(
+            f"🔎 *Analisando {origin} → {destination}...*\n"
+            f"📅 Partida: {departure_date}\n"
+            f"⚡ A comparar mercados BR+PT, ida, ida+volta e aeroportos alternativos em simultâneo...",
+            str(chat_id)
         )
-        await send_telegram_message(confirm_text, str(chat_id))
-        await send_interactive_menu(str(chat_id), state)
+
+        # Run all 3 searches in parallel: one-way BR+PT, round-trip BR+PT, alternative airports
+        ow_task = flight_manager.search_flights_multi_market(
+            origin, destination, departure_date, None, 1
+        )
+        rt_task = flight_manager.search_flights_multi_market(
+            origin, destination, departure_date, auto_return_date, 1
+        )
+        alt_task = flight_manager.search_alternative_routes(
+            origin, destination, departure_date, None, 1
+        )
+
+        ow_result, rt_result, alt_results = await asyncio.gather(ow_task, rt_task, alt_task)
+
+        # Gather all candidate offers into a unified ranked list
+        all_offers = []
+
+        def collect(flights, label, booking_label, ret_date=None):
+            for f in (flights or [])[:2]:
+                all_offers.append({
+                    **f,
+                    "_label": label,
+                    "_return": ret_date,
+                    "_booking_label": booking_label
+                })
+
+        collect(ow_result.get("br", []), "🇧🇷 Só Ida (mercado BR)", "BR", None)
+        collect(ow_result.get("pt", []), "🇵🇹 Só Ida (mercado PT)", "PT", None)
+        collect(rt_result.get("br", []), f"🇧🇷 Ida+Volta até {auto_return_date} (BR)", "BR", auto_return_date)
+        collect(rt_result.get("pt", []), f"🇵🇹 Ida+Volta até {auto_return_date} (PT)", "PT", auto_return_date)
+
+        # Sort all by price ascending
+        all_offers.sort(key=lambda x: x["price"])
+
+        if not all_offers:
+            await send_telegram_message(
+                "❌ Nenhum voo encontrado para esta rota e data.\n"
+                "Tente outro mês ou verifique os códigos IATA.",
+                str(chat_id)
+            )
+            return
+
+        # Build the ranked results message
+        lines = [
+            f"✈️ *{origin} → {destination}* — Análise Completa",
+            f"📅 Partida: *{departure_date}*",
+            f"🏆 *{len(all_offers)} opções ranqueadas por preço:*",
+            ""
+        ]
+
+        for i, offer in enumerate(all_offers[:6]):
+            out = offer.get("outbound", {})
+            stops = "Direto ✅" if offer.get("stops", 1) == 0 else f"{offer.get('stops',1)} escala(s)"
+            booking_url = offer.get("booking_url", "")
+            label = offer["_label"]
+            price_tag = f"*#{i+1} — ${offer['price']}*"
+            line = f"{price_tag} | {label}\n   {out.get('airline','?')} {out.get('departure_time','?')}→{out.get('arrival_time','?')} | {stops}"
+            lines.append(line)
+            if booking_url:
+                lines.append(f"   🔗 [Abrir no Google Flights]({booking_url})")
+            lines.append("")
+
+        # Best value recommendation
+        best = all_offers[0]
+        best_label = best["_label"]
+        lines.append(f"💡 *Melhor custo-benefício:* {best_label} a *${best['price']}*")
+
+        # Market savings tip
+        ow_br = ow_result.get("br_cheapest")
+        ow_pt = ow_result.get("pt_cheapest")
+        if ow_br and ow_pt and abs(ow_br - ow_pt) > 1:
+            cheaper_market = "🇧🇷 Brasil" if ow_br < ow_pt else "🇵🇹 Portugal"
+            diff = abs(round(ow_br - ow_pt, 2))
+            lines.append(f"🌎 O mercado *{cheaper_market}* está *${diff} mais barato* nesta rota.")
+
+        await send_telegram_message("\n".join(lines), str(chat_id))
+
+        # Alternative airports section
+        if alt_results:
+            alt_lines = ["🗺️ *Aeroportos Alternativos:*"]
+            for alt in alt_results[:2]:
+                ao = alt.get("alt_origin", origin)
+                ad = alt.get("alt_destination", destination)
+                url = alt.get("booking_url", "")
+                alt_lines.append(f"• *{ao} → {ad}*: ${alt['price']}")
+                if url:
+                    alt_lines.append(f"  🔗 [Ver no Google Flights]({url})")
+            await send_telegram_message("\n".join(alt_lines), str(chat_id))
+
+        # Final CTA
+        state["return_date"] = auto_return_date
+        await send_telegram_message(
+            "🔔 Quer monitorizar o preço 24/7? Diga *'ativar alerta'* e aviso-o quando baixar!",
+            str(chat_id)
+        )
 
     else:
         # Natural language reply
