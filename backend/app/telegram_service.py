@@ -1,4 +1,5 @@
 import os
+import io
 import logging
 import httpx
 from typing import Dict, Any, Optional
@@ -231,3 +232,42 @@ async def answer_callback(callback_query_id: str, text: Optional[str] = None) ->
         logger.error(f"Error answering callback query: {e}")
         return False
 
+
+async def send_voice_message(text: str, chat_id: Optional[str] = None) -> bool:
+    """
+    Converts text to speech using gTTS and sends as a Telegram voice message.
+    Falls back to text message if gTTS is not available.
+    """
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    target_chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID")
+
+    if not bot_token or not target_chat_id:
+        return False
+
+    try:
+        from gtts import gTTS
+        tts = gTTS(text=text, lang="pt", slow=False)
+        audio_buffer = io.BytesIO()
+        tts.write_to_fp(audio_buffer)
+        audio_buffer.seek(0)
+
+        url = f"https://api.telegram.org/bot{bot_token}/sendVoice"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                data={"chat_id": target_chat_id},
+                files={"voice": ("voice.mp3", audio_buffer, "audio/mpeg")},
+                timeout=30.0
+            )
+            if response.status_code == 200:
+                logger.info(f"Telegram Service: Voice message sent to chat {target_chat_id}")
+                return True
+            else:
+                logger.error(f"Telegram Service: Failed to send voice. Status {response.status_code}: {response.text}")
+                return await send_telegram_message(text, chat_id)
+    except ImportError:
+        logger.warning("gTTS not installed. Falling back to text message.")
+        return await send_telegram_message(text, chat_id)
+    except Exception as e:
+        logger.error(f"Telegram Service: Voice message error: {e}")
+        return await send_telegram_message(text, chat_id)
