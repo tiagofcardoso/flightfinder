@@ -27,45 +27,71 @@ class SerpApiFlightProvider(FlightProvider):
         passengers: int = 1,
         max_price: Optional[float] = None
     ) -> List[Dict[str, Any]]:
+        return await self.search_flights_for_country(origin, destination, departure_date, return_date, passengers, max_price)
+
+    async def search_flights_for_country(
+        self,
+        origin: str,
+        destination: str,
+        departure_date: str,
+        return_date: Optional[str] = None,
+        passengers: int = 1,
+        max_price: Optional[float] = None,
+        country: str = "br",  # 'br' for Brazil, 'pt' for Portugal
+        currency: str = "USD"
+    ) -> List[Dict[str, Any]]:
         if not self.is_configured:
             return []
-            
+
         try:
+            # Country/locale mapping
+            locale_map = {
+                "br": {"gl": "br", "hl": "pt-BR"},
+                "pt": {"gl": "pt", "hl": "pt-PT"},
+                "us": {"gl": "us", "hl": "en"},
+            }
+            locale = locale_map.get(country, locale_map["br"])
+
             params = {
                 "engine": "google_flights",
                 "departure_id": origin.upper(),
                 "arrival_id": destination.upper(),
                 "outbound_date": departure_date,
-                "currency": "USD",
+                "currency": currency,
+                "gl": locale["gl"],
+                "hl": locale["hl"],
                 "api_key": self.api_key
             }
-            
+
             if return_date:
                 params["return_date"] = return_date
                 params["type"] = "1"  # Round trip
             else:
                 params["type"] = "2"  # One-way
-                
-            # If multi-passengers, standard Google Flights handles it via query
-            # but SerpAPI default handles adults count:
-            # params["adults"] = passengers
-            
+
             async with httpx.AsyncClient() as client:
                 response = await client.get(self.base_url, params=params, timeout=20.0)
                 if response.status_code != 200:
                     logger.error(f"SerpAPI Google Flights returned status {response.status_code}: {response.text}")
                     return []
-                    
+
                 data = response.json()
-                
+
                 # Capture the direct Google Flights URL from SerpAPI metadata
                 search_url = data.get("search_metadata", {}).get("google_flights_url", None)
-                
+
                 # SerpAPI returns flights under 'best_flights' and 'other_flights'
                 flights_list = data.get("best_flights", []) + data.get("other_flights", [])
-                
-                return self._parse_serpapi_flights(flights_list, origin, destination, passengers, max_price, search_url)
-                
+
+                results = self._parse_serpapi_flights(flights_list, origin, destination, passengers, max_price, search_url)
+
+                # Tag each result with the market it came from
+                for r in results:
+                    r["market"] = country.upper()
+                    r["market_currency"] = currency
+
+                return results
+
         except Exception as e:
             logger.error(f"Error searching flights on SerpAPI: {e}", exc_info=True)
             return []

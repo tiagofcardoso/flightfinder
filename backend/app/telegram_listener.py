@@ -26,25 +26,40 @@ USER_STATES: Dict[int, Dict[str, Any]] = {}
 
 flight_manager = FlightSearchManager()
 
-# System prompt for the conversational agent
-SYSTEM_PROMPT = """Você é o AeroMilhas Bot, um assistente de viagens amigável, inteligente e descontraído integrado no Telegram.
+# System prompt for the conversational super-agent
+SYSTEM_PROMPT = """Você é o AeroMilhas, um SUPER AGENTE DE VIAGENS com 20 anos de experiência, especialista em encontrar as melhores tarifas aéreas entre Brasil, Portugal e o mundo.
 
-Seu objetivo é ajudar o utilizador a encontrar voos baratos e configurar alertas de preço.
+Você pensa ALÉM do pedido do utilizador — antecipa necessidades, sugere rotas alternativas mais baratas e sempre age como um consultor de viagens premium.
 
-REGRAS DE COMPORTAMENTO:
-1. Converse naturalmente em Português (PT/BR), adaptando ao tom do utilizador.
-2. Se o utilizador disser "oi", "olá", "boa tarde" etc., responda de forma amigável e pergunte para onde quer ir.
-3. Extraia gradualmente as informações necessárias para uma pesquisa: origem, destino e data de partida.
-4. Se faltar algum dado, PERGUNTE de forma natural — nunca dê erro.
-5. Lembre-se do contexto anterior da conversa — o utilizador pode dizer "e se for em outubro?" referindo-se ao destino anterior.
-6. Quando tiver origem + destino + data de partida, retorne um JSON especial no seguinte formato EXATO (e NADA MAIS além do JSON):
-   {"action": "search", "origin": "LIS", "destination": "CDG", "departure_date": "2026-09-10", "return_date": null, "target_price": 500.0}
-7. Para mensagens de conversa normal (não pesquisa), responda em texto livre e curto (máximo 3 linhas).
-8. Se o utilizador mencionar um orçamento/preço máximo, inclua em target_price.
-9. Se mencionar "só ida" ou "one way", return_date é null. Se mencionar "ida e volta" e der data de volta, inclua.
-10. Ano de referência atual: 2026. Se o utilizador disser "setembro" sem ano, assuma 2026.
-11. Converta cidades para códigos IATA (Lisboa->LIS, Paris->CDG, São Paulo->GRU, Nova Iorque->JFK, etc.)
-12. Seja proativo: após mostrar resultados, sugira ativar um alerta de preço."""
+═══════════════════════════════════
+COMPORTAMENTO E CONVERSAÇÃO
+═══════════════════════════════════
+1. Converse naturalmente em Português (PT/BR), adapte ao tom do utilizador (formal/informal).
+2. Seja caloroso, entusiasta e proativo — como um agente de viagens experiente que adora o seu trabalho.
+3. Se o utilizador disser "oi", "olá", etc., responda com energia e pergunte para onde quer ir.
+4. Lembre-se do contexto anterior — "e se for em outubro?" refere-se sempre à última rota mencionada.
+5. Se faltar origem, destino ou data, PERGUNTE de forma natural — nunca dê erro genérico.
+
+═══════════════════════════════════
+INTELIGÊNCIA DE ROTAS (PENSE SEMPRE NISTO)
+═══════════════════════════════════
+6. Sempre pense em alternativas de custo-benefício ANTES de pesquisar:
+   - Aeroportos alternativos próximos (ex: GRU/CGH/VCP para São Paulo, LIS/OPO para Portugal)
+   - Rotas via hubs mais baratos (ex: GRU→MIA→JFK pode ser mais barato que direto)
+   - Datas adjacentes (terça/quarta são geralmente mais baratas que sexta/domingo)
+   - Ida e volta vs só ida (às vezes comprar 2 passagens de ida é mais barato)
+7. Quando sugerir pesquisa, mencione que vai comparar preços do mercado brasileiro E português.
+
+═══════════════════════════════════
+AÇÃO DE PESQUISA (FORMATO OBRIGATÓRIO)
+═══════════════════════════════════
+8. Quando tiver origem + destino + data de partida, retorne EXCLUSIVAMENTE este JSON (sem mais nada):
+   {"action": "search", "origin": "GRU", "destination": "LIS", "departure_date": "2026-10-15", "return_date": "2026-10-22", "target_price": 800.0}
+9. Para respostas de conversa normal: texto livre, máximo 4 linhas, use emojis com moderação.
+10. Conversões IATA obrigatórias: Lisboa→LIS, Porto→OPO, São Paulo→GRU, Rio→GIG, Paris→CDG, Nova Iorque→JFK, Miami→MIA, Londres→LHR, Madrid→MAD, Roma→FCO, Frankfurt→FRA, Amsterdam→AMS, Dubai→DXB, Tóquio→NRT.
+11. Ano de referência: 2026. "setembro" sem ano = setembro 2026.
+12. Se o utilizador disser "só ida": return_date = null.
+13. Após mostrar resultados, SEMPRE sugira ativar um alerta 24/7 para monitorizar o preço."""
 
 
 async def chat_with_gemini_agent(chat_id: int, user_text: str) -> str:
@@ -287,87 +302,138 @@ async def handle_callback_query(chat_id: int, message_id: int, data: str, callba
             await send_telegram_message(f"❌ Erro ao registar alerta: {e}", str(chat_id))
 
     elif data == "run_search":
-        await answer_callback(callback_query_id, "Procurando voos...")
-        state["status_msg"] = "Pesquisando voos em tempo real... 🚀"
+        await answer_callback(callback_query_id, "Procurando voos nos mercados BR e PT...")
+        state["status_msg"] = "🌎 Comparando preços Brasil vs Portugal... 🚀"
         await edit_interactive_menu(str(chat_id), message_id, state)
 
         try:
-            flights = await flight_manager.search_flights(
-                origin=state["origin"],
-                destination=state["destination"],
-                departure_date=state["departure_date"],
-                return_date=state["return_date"],
-                passengers=1
+            origin = state["origin"]
+            destination = state["destination"]
+            dep_date = state["departure_date"]
+            ret_date = state["return_date"]
+
+            # Run multi-market search AND alternative routes in parallel
+            multi_task = flight_manager.search_flights_multi_market(
+                origin=origin, destination=destination,
+                departure_date=dep_date, return_date=ret_date, passengers=1
             )
+            alt_task = flight_manager.search_alternative_routes(
+                origin=origin, destination=destination,
+                departure_date=dep_date, return_date=ret_date, passengers=1
+            )
+            multi_result, alt_results = await asyncio.gather(multi_task, alt_task)
 
-            if not flights:
-                await send_telegram_message("❌ *Nenhum voo encontrado para esta rota e data.*", str(chat_id))
-                state["status_msg"] = "Pesquisa concluída (Nenhum voo)."
+            br_flights = multi_result.get("br", [])
+            pt_flights = multi_result.get("pt", [])
+            recommendation = multi_result.get("recommendation", "br")
+            savings = multi_result.get("savings", 0)
+
+            # Apply direct filter if requested
+            if state.get("direct"):
+                br_flights = [f for f in br_flights if f["stops"] == 0]
+                pt_flights = [f for f in pt_flights if f["stops"] == 0]
+
+            all_flights = br_flights or pt_flights
+            if not all_flights:
+                await send_telegram_message("❌ *Nenhum voo encontrado para esta rota e data.*\nTente datas diferentes ou active as Datas Flexíveis.", str(chat_id))
+                state["status_msg"] = "Pesquisa concluída (Nenhum resultado)."
                 await edit_interactive_menu(str(chat_id), message_id, state)
                 return
 
-            filtered = flights
-            if state["direct"]:
-                filtered = [f for f in flights if f["stops"] == 0]
-
-            if not filtered:
-                await send_telegram_message("❌ *Nenhum voo DIRETO encontrado para este dia.*", str(chat_id))
-                state["status_msg"] = "Pesquisa concluída (Sem voos diretos)."
-                await edit_interactive_menu(str(chat_id), message_id, state)
-                return
-
-            lines = [
-                f"🔍 *Melhores Voos ({len(filtered)} opções)*",
-                f"✈️ *{state['origin']} → {state['destination']}* ({'Ida e Volta' if state['return_date'] else 'Só Ida'})",
+            # ── Header ──────────────────────────────────────────
+            header = [
+                f"🔍 *AeroMilhas — Análise de Mercado*",
+                f"✈️ *{origin} → {destination}* ({'Ida e Volta' if ret_date else 'Só Ida'})",
+                f"📅 {dep_date}" + (f" ↩ {ret_date}" if ret_date else ""),
                 ""
             ]
+            await send_telegram_message("\n".join(header), str(chat_id))
 
-            for i, flight in enumerate(filtered[:3]):
-                out = flight["outbound"]
-                ret_info = flight.get("inbound")
-                stops_text = "Direto ✅" if flight["stops"] == 0 else f"{flight['stops']} escala(s) ⚠️"
-                booking_url = flight.get("booking_url", "")
+            # ── Brazil market results ────────────────────────────
+            if br_flights:
+                br_lines = ["🇧🇷 *Mercado Brasil (Google Flights BR):*"]
+                for i, flight in enumerate(br_flights[:3]):
+                    out = flight["outbound"]
+                    ret_info = flight.get("inbound")
+                    stops_text = "Direto ✅" if flight["stops"] == 0 else f"{flight['stops']} escala(s) ⚠️"
+                    booking_url = flight.get("booking_url", "")
+                    line = f"*{i+1}. ${flight['price']}* — {stops_text} | {out['airline']} {out['departure_time']}→{out['arrival_time']}"
+                    if ret_info:
+                        line += f" / {ret_info['departure_time']}→{ret_info['arrival_time']}"
+                    br_lines.append(line)
+                    if booking_url:
+                        br_lines.append(f"   🔗 [Ver no Google Flights]({booking_url})")
+                await send_telegram_message("\n".join(br_lines), str(chat_id))
 
-                flight_lines = [
-                    f"*{i+1}. ${flight['price']}* — {stops_text}",
-                    f"   • *Ida*: {out['airline']} {out['departure_time']}→{out['arrival_time']}"
-                ]
-                if ret_info:
-                    flight_lines.append(f"   • *Volta*: {ret_info['airline']} {ret_info['departure_time']}→{ret_info['arrival_time']}")
-                if booking_url:
-                    flight_lines.append(f"   🔗 [Abrir no Google Flights]({booking_url})")
-                flight_lines.append("")
-                lines.extend(flight_lines)
+            # ── Portugal market results ──────────────────────────
+            if pt_flights:
+                pt_lines = ["🇵🇹 *Mercado Portugal (Google Flights PT):*"]
+                for i, flight in enumerate(pt_flights[:3]):
+                    out = flight["outbound"]
+                    ret_info = flight.get("inbound")
+                    stops_text = "Direto ✅" if flight["stops"] == 0 else f"{flight['stops']} escala(s) ⚠️"
+                    booking_url = flight.get("booking_url", "")
+                    line = f"*{i+1}. ${flight['price']}* — {stops_text} | {out['airline']} {out['departure_time']}→{out['arrival_time']}"
+                    if ret_info:
+                        line += f" / {ret_info['departure_time']}→{ret_info['arrival_time']}"
+                    pt_lines.append(line)
+                    if booking_url:
+                        pt_lines.append(f"   🔗 [Ver no Google Flights]({booking_url})")
+                await send_telegram_message("\n".join(pt_lines), str(chat_id))
 
-            await send_telegram_message("\n".join(lines), str(chat_id))
+            # ── Market comparison verdict ────────────────────────
+            if br_flights and pt_flights and savings > 1:
+                rec_flag = "🇧🇷" if recommendation == "br" else "🇵🇹"
+                rec_name = "Brasil" if recommendation == "br" else "Portugal"
+                verdict = (
+                    f"💡 *Recomendação do Agente:*\n"
+                    f"{rec_flag} Pesquisar pelo mercado *{rec_name}* está *${savings} mais barato* nesta rota!\n"
+                    f"Use a VPN ou acesse google.com.{'br' if recommendation == 'br' else 'pt'}/flights para garantir este preço."
+                )
+                await send_telegram_message(verdict, str(chat_id))
 
-            if state["flexible"]:
+            # ── Alternative airports/routes ──────────────────────
+            if alt_results:
+                alt_lines = ["🗺️ *Rotas Alternativas (aeroportos próximos):*"]
+                for alt in alt_results[:2]:
+                    alt_org = alt.get("alt_origin", origin)
+                    alt_dst = alt.get("alt_destination", destination)
+                    booking_url = alt.get("booking_url", "")
+                    alt_lines.append(f"• *{alt_org} → {alt_dst}*: ${alt['price']}")
+                    if booking_url:
+                        alt_lines.append(f"  🔗 [Ver no Google Flights]({booking_url})")
+                await send_telegram_message("\n".join(alt_lines), str(chat_id))
+
+            # ── Flexible dates matrix ────────────────────────────
+            if state.get("flexible"):
                 await send_telegram_message("📅 *A calcular datas alternativas...*", str(chat_id))
                 matrix = await flight_manager.get_price_matrix(
-                    origin=state["origin"],
-                    destination=state["destination"],
-                    departure_date=state["departure_date"],
-                    return_date=state["return_date"],
-                    range_days=2,
-                    passengers=1
+                    origin=origin, destination=destination,
+                    departure_date=dep_date, return_date=ret_date, range_days=2, passengers=1
                 )
                 if matrix and matrix.get("matrix"):
                     matrix_lines = ["📅 *Preços em Datas Alternativas:*"]
-                    sorted_cells = sorted(matrix["matrix"], key=lambda x: x["price"])
-                    for cell in sorted_cells[:4]:
+                    for cell in sorted(matrix["matrix"], key=lambda x: x["price"])[:5]:
                         dep_f = cell["departure_date"]
                         ret_f = cell.get("return_date")
                         row = f"   • {dep_f}" + (f" ↩ {ret_f}" if ret_f else "") + f": *${cell['price']}*"
                         if cell.get("is_cheapest"):
-                            row += " 🏆 *Mais Barato!*"
+                            row += " 🏆"
                         matrix_lines.append(row)
                     await send_telegram_message("\n".join(matrix_lines), str(chat_id))
 
-            state["status_msg"] = "Pesquisa concluída! 🎉"
+            # ── Agent pro tip ────────────────────────────────────
+            pro_tip = (
+                "🤖 *Dica do Agente:* Active o alerta 24/7 para monitorizar o preço desta rota!\n"
+                "Use o botão *🔔 Ativar Alerta* e eu aviso-o quando o preço baixar."
+            )
+            await send_telegram_message(pro_tip, str(chat_id))
+
+            state["status_msg"] = "Análise completa! 🎉"
             await edit_interactive_menu(str(chat_id), message_id, state)
 
         except Exception as search_err:
-            logger.error(f"Flight search error: {search_err}")
+            logger.error(f"Flight search error: {search_err}", exc_info=True)
             await send_telegram_message("❌ Ocorreu um erro ao realizar a busca de voos.", str(chat_id))
             state["status_msg"] = f"Erro: {search_err}"
             await edit_interactive_menu(str(chat_id), message_id, state)
