@@ -6,7 +6,11 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-async def send_telegram_message(text: str, chat_id: Optional[str] = None) -> bool:
+async def send_telegram_message(
+    text: str,
+    chat_id: Optional[str] = None,
+    reply_markup: Optional[Dict[str, Any]] = None
+) -> bool:
     """
     Sends a Markdown-formatted message to a Telegram chat using the configured Telegram Bot.
     """
@@ -27,7 +31,9 @@ async def send_telegram_message(text: str, chat_id: Optional[str] = None) -> boo
         "text": text,
         "parse_mode": "Markdown"
     }
-    
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+        
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, timeout=10.0)

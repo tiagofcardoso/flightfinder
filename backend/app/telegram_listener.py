@@ -348,10 +348,23 @@ async def handle_telegram_message(chat_id: int, text: str, reply_with_voice: boo
 
         # Final CTA
         state["return_date"] = auto_return_date
-        await send_telegram_message(
-            "🔔 Quer monitorizar o preço 24/7? Diga *'ativar alerta'* e aviso-o quando baixar!",
-            str(chat_id)
+        best_return_date = best.get("_return") or ""
+        best_price = float(best["price"])
+        cb_data = f"alert_cta:{origin}:{destination}:{departure_date}:{best_return_date}:{best_price}"
+        
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "🔔 Ativar Alerta 24/7", "callback_data": cb_data}
+                ]
+            ]
+        }
+        
+        cta_text = (
+            "🔔 *Quer monitorizar este preço 24/7?*\n"
+            "Ative o alerta e aviso-o imediatamente quando o preço baixar!"
         )
+        await send_telegram_message(cta_text, str(chat_id), reply_markup=reply_markup)
 
     else:
         # Natural language reply
@@ -363,6 +376,42 @@ async def handle_telegram_message(chat_id: int, text: str, reply_with_voice: boo
 
 async def handle_callback_query(chat_id: int, message_id: int, data: str, callback_query_id: str):
     """Processes button clicks from Telegram inline keyboard."""
+    if data.startswith("alert_cta:"):
+        await answer_callback(callback_query_id, "Configurando Alerta 24/7...")
+        try:
+            # Format: alert_cta:origin:destination:departure_date:return_date:target_price
+            parts = data.split(":")
+            if len(parts) >= 6:
+                origin = parts[1].upper()
+                destination = parts[2].upper()
+                departure_date = parts[3]
+                return_date = parts[4] if parts[4] else None
+                target_price = float(parts[5])
+                
+                alert_id = create_alert(
+                    origin=origin,
+                    destination=destination,
+                    departure_date=departure_date,
+                    return_date=return_date,
+                    target_price=target_price,
+                    chat_id=str(chat_id)
+                )
+                
+                success_text = (
+                    f"✅ *Alerta 24/7 Ativado!* (ID: #{alert_id}) 🔔\n"
+                    f"📍 Rota: *{origin} ➡️ {destination}*\n"
+                    f"📅 Partida: {departure_date}" + (f" | Volta: {return_date}" if return_date else "") + "\n"
+                    f"🎯 Orçamento Alvo: *${target_price}*\n\n"
+                    f"Vou monitorizar e aviso-o assim que o preço baixar! 🔔"
+                )
+                await send_telegram_message(success_text, str(chat_id))
+            else:
+                await send_telegram_message("❌ Formato de callback inválido.", str(chat_id))
+        except Exception as e:
+            logger.error(f"Failed to register CTA alert: {e}")
+            await send_telegram_message(f"❌ Erro ao registar alerta: {e}", str(chat_id))
+        return
+
     state = USER_STATES.get(chat_id)
     if not state:
         await answer_callback(callback_query_id, "Sessão expirada. Envie uma nova mensagem.")
