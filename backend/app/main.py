@@ -37,23 +37,29 @@ class AlertRequest(BaseModel):
 async def start_keep_alive_loop():
     url = os.environ.get("RENDER_EXTERNAL_URL")
     if not url:
-        logger.info("Keep-alive loop disabled: RENDER_EXTERNAL_URL not found.")
+        logger.warning(
+            "⚠️ RENDER_EXTERNAL_URL not found in environment variables! "
+            "Please configure RENDER_EXTERNAL_URL in Render dashboard to keep the service awake."
+        )
         return
     
     if not url.endswith("/"):
         url += "/"
     url += "api/health"
     
-    logger.info(f"Keep-alive loop started. Pinging {url} every 14 minutes.")
+    logger.info(f"Keep-alive loop started. Pinging {url} every 10 minutes.")
     import httpx
-    while True:
-        await asyncio.sleep(14 * 60) # 14 minutes
-        try:
-            async with httpx.AsyncClient() as client:
-                res = await client.get(url, timeout=10.0)
-                logger.info(f"Keep-alive ping successful: {res.status_code}")
-        except Exception as e:
-            logger.error(f"Keep-alive ping failed: {e}")
+    try:
+        async with httpx.AsyncClient() as client:
+            while True:
+                await asyncio.sleep(10 * 60) # 10 minutes
+                try:
+                    res = await client.get(url, timeout=10.0)
+                    logger.info(f"Keep-alive ping successful: {res.status_code}")
+                except Exception as e:
+                    logger.error(f"Keep-alive ping failed: {e}")
+    except Exception as outer_err:
+        logger.error(f"Keep-alive client manager error: {outer_err}")
 
 # Life cycle event manager for FastAPI
 @asynccontextmanager

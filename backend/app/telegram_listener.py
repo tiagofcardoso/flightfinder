@@ -365,6 +365,10 @@ async def handle_telegram_message(chat_id: int, text: str, reply_with_voice: boo
             "Ative o alerta e aviso-o imediatamente quando o preço baixar!"
         )
         await send_telegram_message(cta_text, str(chat_id), reply_markup=reply_markup)
+        
+        # Force garbage collection to free memory
+        import gc
+        gc.collect()
 
     else:
         # Natural language reply
@@ -580,6 +584,10 @@ async def handle_callback_query(chat_id: int, message_id: int, data: str, callba
 
             state["status_msg"] = "Análise completa! 🎉"
             await edit_interactive_menu(str(chat_id), message_id, state)
+            
+            # Force garbage collection to free memory
+            import gc
+            gc.collect()
 
         except Exception as search_err:
             logger.error(f"Flight search error: {search_err}", exc_info=True)
@@ -601,10 +609,10 @@ async def start_telegram_listener():
 
     await asyncio.sleep(5)
 
-    while True:
-        try:
-            params = {"offset": offset, "timeout": 15}
-            async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                params = {"offset": offset, "timeout": 15}
                 response = await client.get(url, params=params, timeout=25.0)
 
                 if response.status_code == 200:
@@ -639,18 +647,17 @@ async def start_telegram_listener():
                     logger.warning("Telegram Listener: 409 Conflict — attempting to delete active webhook and retry...")
                     try:
                         del_url = f"https://api.telegram.org/bot{bot_token}/deleteWebhook?drop_pending_updates=true"
-                        async with httpx.AsyncClient() as del_client:
-                            del_resp = await del_client.get(del_url, timeout=10.0)
-                            logger.info(f"Telegram Listener: deleteWebhook result: {del_resp.text}")
+                        del_resp = await client.get(del_url, timeout=10.0)
+                        logger.info(f"Telegram Listener: deleteWebhook result: {del_resp.text}")
                     except Exception as del_err:
                         logger.error(f"Telegram Listener: Failed to delete webhook: {del_err}")
                     await asyncio.sleep(5)
                 else:
                     logger.error(f"Telegram Listener: Status {response.status_code}: {response.text}")
 
-        except httpx.RequestError as req_err:
-            logger.debug(f"Telegram Listener: Network warning: {req_err}")
-        except Exception as e:
-            logger.error(f"Telegram Listener: Polling exception: {e}", exc_info=True)
+            except httpx.RequestError as req_err:
+                logger.debug(f"Telegram Listener: Network warning: {req_err}")
+            except Exception as e:
+                logger.error(f"Telegram Listener: Polling exception: {e}", exc_info=True)
 
-        await asyncio.sleep(2)
+            await asyncio.sleep(2)
